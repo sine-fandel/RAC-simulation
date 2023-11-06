@@ -29,19 +29,20 @@ import time
 from deap.algorithms import varAnd
 
 class SingleTreeGP():
-    def __init__(self) -> None:
+    def __init__(self, seed) -> None:
         self.name = "single_gp"
-        self.population_size = 20
-        self.generation_num = 5
+        self.population_size = 100
+        self.generation_num = 100
         self.cxpb = 0.8
         self.mutpb = 0.2
         self.elitism_size = 50
-        self.tournament_size = 4
+        self.tournament_size = 7
         # self.env = env
         self.arity = 6
 
         self.gen = 0
-        
+        self.seed = seed
+
         '''Setting of GP tree
         '''
         self.pset = gp.PrimitiveSet("MAIN", self.arity)
@@ -55,7 +56,7 @@ class SingleTreeGP():
 
         self.toolbox = base.Toolbox()
 
-        self.toolbox.register("expr", gp.genHalfAndHalf, pset=self.pset, min_=1, max_=2)
+        self.toolbox.register("expr", gp.genHalfAndHalf, pset=self.pset, min_=1, max_=6)
         self.toolbox.register("individual", tools.initIterate, creator.Individual, self.toolbox.expr)
         self.toolbox.register("population", tools.initRepeat, list, self.toolbox.individual)
         self.toolbox.register("compile", gp.compile, pset=self.pset)
@@ -72,10 +73,9 @@ class SingleTreeGP():
 
     def eval(self, individual):
         func = self.toolbox.compile(expr=individual)
-        print(str(individual))
         hist_fitness = []       # save all fitness
 
-        test_case_num = 20
+        test_case_num = testcase_num
 
         for case in range(test_case_num):
             init_containers, init_os, init_pms, init_pm_types, init_vms, init_vm_types = load_init_env_data(case).values()
@@ -115,11 +115,11 @@ class SingleTreeGP():
 
             hist_fitness.append(sim.running_energy_unit_time)
 
-        print(math.fsum(hist_fitness) / test_case_num)
+        # print(math.fsum(hist_fitness) / test_case_num)
         return math.fsum(hist_fitness) / test_case_num,
                 
     def perturb(self):
-        random.seed(0)
+        random.seed(self.seed)
 
         pop = self.toolbox.population(n=self.population_size)
         hof = tools.HallOfFame(self.elitism_size)
@@ -136,6 +136,9 @@ class SingleTreeGP():
                                 halloffame=hof, verbose=True)
 
         print('Best individual : ', str(hof[0]), hof[0].fitness)
+
+        pool.close()
+
         return pop, log, hof
 
     def evoGP(self, population, toolbox, cxpb, mutpb, ngen, stats=None,
@@ -189,6 +192,7 @@ class SingleTreeGP():
             logbook.record(gen=gen, nevals=len(invalid_ind), **record)
             if verbose:
                 print(logbook.stream)
+
 
         return population, logbook
 
