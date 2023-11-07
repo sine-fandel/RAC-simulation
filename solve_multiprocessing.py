@@ -20,7 +20,8 @@ from env.simulator.code.simulator import simulator
 
 from env.simulator.code.simulator import SimulatorState, Simulator
 
-from env.simulator.code.simulator.io.loading import load_init_env_data, load_container_data, load_os_data
+from env.simulator.code.simulator.io.loading import load_init_env_data, load_container_data, load_os_data,\
+                                                    load_test_container_data, load_test_os_data
 
 from env.simulator.code.simulator.metrics.pm import FirstFitPMAllocation
 
@@ -77,7 +78,6 @@ toolbox.register("compile", gp.compile, pset=pset)
 
 def eval(individual):
     func = toolbox.compile(expr=individual)
-    print(str(individual))
     hist_fitness = []       # save all fitness
 
     test_case_num = testcase_num
@@ -108,7 +108,7 @@ def eval(individual):
             if sim.to_allocate_vm_data != None:
                 pm_selection = ff_pm(sim.state, sim.to_allocate_vm_data[1])
                 sim.step_second_layer(pm_selection, *tuple(input_containers.iloc[i].to_list()), input_os.iloc[i]["os-id"])
-        
+
         # # # # # # # # # # # # # # # # # #  
         # debug
         # # # # # # # # # # # # # # # # # # 
@@ -195,14 +195,40 @@ def set_seed(seed):
 if __name__ == "__main__":
 
     import argparse
+    from datetime import datetime
+    import json
+
     parser = argparse.ArgumentParser()
 
+    parser.add_argument("-r", "--RUN", help="run", dest="run", type=int, default="0")
     parser.add_argument("-s", "--SEED", help="seed", dest="seed", type=int, default="0")
     args = parser.parse_args()
 
     set_seed(args.seed)
+    run = args.run
+
+    # create json file to save training data
+    training_result = {
+                        "population_size": population_size,
+                        "cxpb": cxpb,
+                        "mutpb": mutpb,
+                        "elitism_size": elitism_size,
+                        "tournament_size": tournament_size,
+                        "min_depth": min_depth,
+                        "max_depth": max_depth,
+                        "mut_min_depth": mut_min_depth,
+                        "mut_max_depth": mut_max_depth,
+                        "generation": {
+
+                        }
+                    }
     
-    start_time = time.time()
+    json_file = f"./results/training/run_{run}_core_{config['cpu_num']}.json"
+    with open(json_file, "w") as gen_file:
+        json.dump(training_result, gen_file)
+
+    
+    start_time = time.time()        # overall time consumption
     # Process Pool
     cpu_count = config["cpu_num"]
     print(f"CPU count: {cpu_count}")
@@ -229,6 +255,7 @@ if __name__ == "__main__":
     start_time = time.time()  # Start time of generation
 
     # Evaluate the individuals with an invalid fitness
+    start_time = time.time()  
     invalid_ind = [ind for ind in pop if not ind.fitness.valid]
     fitnesses = toolbox.map(toolbox.evaluate, invalid_ind)
     for ind, fit in zip(invalid_ind, fitnesses):
@@ -243,10 +270,19 @@ if __name__ == "__main__":
     if verbose:
         print(logbook.stream)
 
+    # update json file to save the best training result of each generation
+    new_data = {"0": {"fitnees": logbook.chapters["fitness"].select("min")[-1], "time": logbook.chapters["fitness"].select("time")[-1] / 60}}
+    with open(json_file, "r") as gen_file:
+        data = json.load(gen_file)
+        data["generation"].update(new_data)
+    with open(json_file, "w") as gen_file:
+        json.dump(data, gen_file)
+    
+
     # Begin the generational process
     for gen in range(1, generation_num + 1):
-        g = gen
-        start_time = time.time()  # Start time of generation
+        start_training_time = time.time()   # Start time of generation
+
         # Select the next generation individuals
         offspring = toolbox.select(pop, len(pop))
 
@@ -268,22 +304,91 @@ if __name__ == "__main__":
 
         # Append the current generation statistics to the logbook
         record = mstats.compile(pop) if mstats else {}
-        record["time"] = time.time() - start_time  # Time taken for the generation
+        record["time"] = time.time() - start_training_time  # Time taken for the generation
         logbook.record(gen=gen, nevals=len(invalid_ind), **record)
         if verbose:
             print(logbook.stream)
 
+        # update json file to save the best training result of each generation
+        new_data = {str(gen): {"fitnees": logbook.chapters["fitness"].select("min")[-1], "time": logbook.chapters["fitness"].select("time")[-1] / 60}}
+        with open(json_file, "r") as gen_file:
+            data = json.load(gen_file)
+            data["generation"].update(new_data)
+        with open(json_file, "w") as gen_file:
+            json.dump(data, gen_file)
+        
 
     end_time = time.time()
     print("total time = {:}".format(end_time - start_time))
     print('Best individual : ', str(hof[0]), hof[0].fitness)
 
     pool.close()
-    with open(f'./results/model/pop_{elitism_size}.pkl', 'wb') as pop_file:
+    with open(f'./results/model/pop_{run}.pkl', 'wb') as pop_file:
         pickle.dump(pop, pop_file)
 
-    with open(f'./results/model/log_{elitism_size}.pkl', 'wb') as log_file:
+    with open(f'./results/model/log_{run}.pkl', 'wb') as log_file:
         pickle.dump(logbook, log_file)
 
-    with open(f'./results/model/hof_{elitism_size}.pkl', 'wb') as hof_file:
+    with open(f'./results/model/hof_{run}.pkl', 'wb') as hof_file:
         pickle.dump(hof, hof_file)
+
+    ####################
+    #test
+    ####################
+
+    def test_eval(individual):
+        func = toolbox.compile(expr=individual)
+        hist_fitness = []       # save all fitness
+
+
+        init_containers, init_os, init_pms, init_pm_types, init_vms, init_vm_types = load_init_env_data(0).values()
+        # Warm up the simulation
+        sim_state = SimulatorState(init_pms, init_vms, init_containers, init_os, init_pm_types, init_vm_types)
+        sim = Simulator(sim_state)
+
+        # load the training data
+        input_containers = load_test_container_data(0)
+        input_os = load_test_os_data(0)
+
+        for i in range(len(input_os)) :
+            # sim.heuristic_method(tuple(input_containers.iloc[i].to_list()), input_os.iloc[i]["os-id"])
+            candidates = sim.vm_candidates(tuple(input_containers.iloc[i].to_list()), input_os.iloc[i]["os-id"])
+            largest_priority = float("inf")
+            selected_id = -1
+            for vm in candidates:
+                if largest_priority > func(*tuple(vm[ : -1])):
+                    selected_id = vm[-1]
+                    largest_priority = func(*vm[ : -1])
+
+            action = {"vm_num": selected_id}
+            sim.step_first_layer(action, *tuple(input_containers.iloc[i].to_list()), input_os.iloc[i]["os-id"])
+            ff_pm = FirstFitPMAllocation()
+            if sim.to_allocate_vm_data != None:
+                pm_selection = ff_pm(sim.state, sim.to_allocate_vm_data[1])
+                sim.step_second_layer(pm_selection, *tuple(input_containers.iloc[i].to_list()), input_os.iloc[i]["os-id"])
+
+        return sim.running_energy_unit_time,
+
+    # save test result for each run
+    
+    model = f'./results/model/hof_{run}.pkl'
+    with open(model, 'rb') as file:
+        hof = pickle.load(file)
+
+    individual = hof[0]
+    test_result = {
+                        "population_size": population_size,
+                        "cxpb": cxpb,
+                        "mutpb": mutpb,
+                        "elitism_size": elitism_size,
+                        "tournament_size": tournament_size,
+                        "min_depth": min_depth,
+                        "max_depth": max_depth,
+                        "mut_min_depth": mut_min_depth,
+                        "mut_max_depth": mut_max_depth,
+                        "test_result": test_eval(individual),
+                    }
+
+    with open(f"./results/test/run_{run}_core_{cpu_count}.json", "w") as gen_file:
+        json.dump(test_result, gen_file)
+

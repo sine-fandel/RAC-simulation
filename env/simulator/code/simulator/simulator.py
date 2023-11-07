@@ -265,6 +265,39 @@ class Simulator():
 
         return candidates_list
 
+    def pm_candidates(self) -> list:
+        vm_cpu_capacity, vm_memory_capacity, vm_used_cpu, vm_used_memory, vm_core = self.to_allocate_vm_data[1]
+        candidates_list = []
+        for i in range(len(self.state.pm_resources)):
+            if self.state.pm_resources[i][0] >= vm_cpu_capacity and \
+                self.state.pm_resources[i][1] >= vm_memory_capacity and \
+                self.state.pm_resources[i][4] >= vm_core:
+                state_list = [vm_cpu_capacity,
+                              vm_memory_capacity,
+                              self.state.pm_resources[i][0],
+                              self.state.pm_resources[i][1],
+                              self.state.pm_resources[i][-2],
+                              self.state.pm_resources[i][-1],
+                              self.state.pm_resources[i][4],
+                              i]
+                candidates_list.append(state_list)
+
+        for index, row in AMAZON_PM_TYPES.iterrows():
+            if vm_cpu_capacity <= row["cpu-max"] and \
+                vm_memory_capacity <= row["memory-max"] and \
+                vm_core <= row["cores-num"]:
+                state_list = [vm_cpu_capacity,
+                              vm_memory_capacity,
+                              row["cpu-max"],
+                              row["memory-max"],
+                              row["cpu-max"],
+                              row["memory-max"],
+                              row["cores-num"], len(self.state.vm_resources) + index]   # the last position is the index
+                
+                candidates_list.append(state_list)
+
+        return candidates_list
+
     def step_first_layer(self, action: dict, *container_stats: Iterable) -> None:
         '''action['vm_num'] is the index of a VM
         '''

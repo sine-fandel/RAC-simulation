@@ -1,0 +1,16 @@
+name: dual_gp
+sub_population_size0: 8
+sub_population_size1: 8
+generation_num: 2
+arity0: 6
+arity1: 7
+cxpb: 0.8
+mutpb: 0.2
+elitism_size: 50
+tournament_size: 3
+min_depth: 1
+max_depth: 2
+mut_min_depth: 0
+mut_max_depth: 1
+testcase_num: 1
+cpu_num: 8
