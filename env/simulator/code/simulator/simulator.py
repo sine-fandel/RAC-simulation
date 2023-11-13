@@ -10,6 +10,7 @@ from typing import List, Iterable, Union
 from pandas import DataFrame
 
 from numpy import array
+import numpy as np
 
 from env.simulator.code.simulator.metrics.vm import CPUJustFitVMAllocation
 from env.simulator.code.simulator.metrics.pm import FirstFitPMAllocation, BestFitCPUPMAllocation
@@ -50,7 +51,7 @@ class SimulatorState():
                  init_containers: DataFrame,
                  init_os: DataFrame,
                  init_pm_types: DataFrame,
-                 init_vm_types: DataFrame
+                 init_vm_types: DataFrame,
                  ) -> None:
         
         self.pms = init_pms
@@ -105,39 +106,39 @@ class SimulatorState():
                 os = self.os.loc[vm_index]
                 
                 self.vm_resources.append([AMAZON_VM_TYPES.loc[vm_type_id]['cpu-max'] * (1 - VM_CPU_OVERHEAD_RATE),
-                                          AMAZON_VM_TYPES.loc[vm_type_id]['memory-max'] - VM_MEMORY_OVERHEAD,
-                                          os['os-id'], AMAZON_VM_TYPES.loc[vm_type_id]['cores-num']])
+                                        AMAZON_VM_TYPES.loc[vm_type_id]['memory-max'] - VM_MEMORY_OVERHEAD,
+                                        os['os-id'], AMAZON_VM_TYPES.loc[vm_type_id]['cores-num']])
                 '''
                 containers_indices = self.vms[vm_index]
-				
+                
                 #pm_index = len(self.pm_resources) - 1
                 pm_index = i
                 
                 self.pm_resources[pm_index] = array([self.pm_resources[pm_index][0] - AMAZON_VM_TYPES.loc[vm_type_id][0],
-                                               self.pm_resources[pm_index][1] - AMAZON_VM_TYPES.loc[vm_type_id][1],
-                                               self.pm_resources[pm_index][2], self.pm_resources[pm_index][3],
-                                               self.pm_resources[pm_index][4], self.pm_resources[pm_index][5],
-                                               self.pm_resources[pm_index][6]])
+                                            self.pm_resources[pm_index][1] - AMAZON_VM_TYPES.loc[vm_type_id][1],
+                                            self.pm_resources[pm_index][2], self.pm_resources[pm_index][3],
+                                            self.pm_resources[pm_index][4], self.pm_resources[pm_index][5],
+                                            self.pm_resources[pm_index][6]])
 
 
                 self.pm_actual_usage[pm_index] = array([self.pm_actual_usage[pm_index][0] - (AMAZON_VM_TYPES.loc[vm_type_id]['cpu-max'] * VM_CPU_OVERHEAD_RATE),
                                                         self.pm_actual_usage[pm_index][1] - VM_CPU_OVERHEAD_RATE, self.pm_actual_usage[pm_index][2],
                                                         self.pm_actual_usage[pm_index][3], self.pm_actual_usage[pm_index][4],
                                                         self.pm_actual_usage[pm_index][5], self.pm_actual_usage[pm_index][6]])
-				
+                
                 self.vm_pm_mapping[vm_index] = pm_index
                 self.vm_index_type_mapping[vm_index] = vm_type_id
-				
+                
                 for container_index in containers_indices:
                     container_stats = self.containers.loc[container_index]
-					
+                    
                     #vm_index = len(self.vm_resources) - 1
                     
                     
                     os = self.os.loc[vm_index]
                     self.vm_resources[vm_index] = array([self.vm_resources[vm_index][0] - container_stats['cpu'],
-                                                         self.vm_resources[vm_index][1] - container_stats['memory'],
-                                                         os['os-id'], self.vm_resources[vm_index][3], self.vm_resources[vm_index][4]])
+                                                        self.vm_resources[vm_index][1] - container_stats['memory'],
+                                                        os['os-id'], self.vm_resources[vm_index][3], self.vm_resources[vm_index][4]])
 
                     pm_stats = self.pm_actual_usage[pm_index]
                     
@@ -155,22 +156,55 @@ class SimulatorState():
             unit_power_consumption += idle_power
             
             utilisation = 1 - (pm_actual_usage_bundle[0] / pm_resources_bundle[5])
-    			
+                
             unit_power_consumption += (max_power - idle_power) * (2 * utilisation - (utilisation ** 1.4))
 
-    
+
         self.current_energy_unit_time = unit_power_consumption
-
-
-        
-        
 
 
 class Simulator():
     
-    def __init__(self, init_state: SimulatorState) -> None:
+    def __init__(self, init_state: SimulatorState, test=False) -> None:
+
+        self.initial_test = test
+        import copy
+        self.state = copy.deepcopy(init_state)      # deep copy: change the self.state would not change init_state 
+        if test == True:
+            self.state.vm_resources = []
+            self.state.max_cpus = []
+            self.state.pm_resources = []
+            self.state.pm_actual_usage = []
+            self.state.vm_resources = []
+            
+            self.state.vm_pm_mapping = {}
+            self.state.vm_index_type_mapping ={}
+
+            self.running_energy_unit_time = 0
         
-        self.state = init_state
+        else :
+            self.running_energy_unit_time = self.state.current_energy_unit_time
+            
+        self.running_energy_consumption = 0
+        self.running_communication_overhead = 0
+
+        self.selected_vm = None                     # the selected VM id
+        self.selected_pm = None                     # the selected PM id
+        self.container_stats = None                 # the stats of container to be deployed
+        
+        self.current_timestamp = 0
+        
+        self.max_cpu = 41600
+        self.max_memory = 256000
+        
+        self.to_allocate_vm_data = None
+
+        self.energy_list = []
+
+    def reset(self, state: SimulatorState) -> None:
+        """reset for rotation
+        """
+        self.state = state
         
         self.running_energy_unit_time = self.state.current_energy_unit_time
         self.running_energy_consumption = 0
@@ -186,25 +220,9 @@ class Simulator():
         
         self.to_allocate_vm_data = None
 
-        self.energy_list = []
-
-        # self.feature_terminal_map = {
-        #     FeatureEnum.CONTAINER_CPU: self.feature_container_cpu,
-        #     FeatureEnum.CONTAINER_MEMORY: self.feature_container_memory,
-        #     FeatureEnum.LEFT_VM_CPU: self.feature_left_vm_cpu,
-        #     FeatureEnum.LEFT_VM_MEMORY: self.feature_left_pm_cpu,
-        #     FeatureEnum.VM_CPU_OVERHEAD: self.feature_vm_cpu_overhead,
-        #     FeatureEnum.VM_MEMORY_OVERHEAD: self.feature_vm_memory,
-        #     FeatureEnum.VM_CPU: self.feature_vm_cpu,
-        #     FeatureEnum.VM_MEMORY: self.feature_vm_memory,
-        #     FeatureEnum.LEFT_PM_CPU: self.feature_left_pm_cpu,
-        #     FeatureEnum.LEFT_PM_MEMORY: self.feature_left_pm_memory,
-        #     FeatureEnum.PM_CPU: self.feature_pm_cpu,
-        #     FeatureEnum.PM_MEMORY: self.feature_pm_memory,
-        #     FeatureEnum.PM_CORE: self.feature_pm_core,
-        # }
+        self.energy_list = []   
     
-    def heuristic_method (self, container_stats: tuple, container_os: int) -> None:
+    def heuristic_method(self, container_stats: tuple, container_os: int) -> None:
         '''
         use heuristic method to generate actions
         '''
@@ -212,14 +230,6 @@ class Simulator():
 
         cpu_just_fit_vm = CPUJustFitVMAllocation ()
         ff_pm = FirstFitPMAllocation()
-
-        # if len(self.state.pm_actual_usage) == 368:
-        #     # print(container_cpu)
-        #     # print(selected_vm_type_cpu * VM_CPU_OVERHEAD_RATE)
-        #     # print(selected_pm_stats[0] - container_cpu - selected_vm_type_cpu * VM_CPU_OVERHEAD_RATE)
-        #     print("pm cpu={:}".format(self.state.pm_resources[367][0]))
-        #     print("pm cpu available={:}".format(self.state.pm_actual_usage[367][0]))
-        
 
         # VM selection
         vm_selection: dict = cpu_just_fit_vm(self.state, container_stats, container_os)
@@ -229,74 +239,100 @@ class Simulator():
         if self.to_allocate_vm_data != None:
             pm_selection: dict = ff_pm(self.state, self.to_allocate_vm_data[1])
             self.step_second_layer(pm_selection, *container_stats, container_os)
-
-    def vm_candidates(self, container_stats: tuple, container_os: int) -> list:
-        '''vm candidates for container
+    
+    def vm_selection(self, func, container_stats, container_os: int) -> list:
+        '''vm selection for container
         '''
-        candidates_list = []
-        self.container_stats = container_stats
-
-        vm_resources = self.state.vm_resources
-        for i in range(len(vm_resources)):
-            if self.container_stats[0] <= vm_resources[i][0] and \
-                self.container_stats[1] <= vm_resources[i][1] and \
-                container_os == vm_resources[i][2]:
-
-                amazon_vms_selected_type = AMAZON_VM_TYPES.loc[self.state.vm_resources[i][-1]]
-                state_list = [self.container_stats[0],
-                                self.container_stats[1],
-                                self.state.vm_resources[i][0],
-                                self.state.vm_resources[i][1],
-                                VM_CPU_OVERHEAD_RATE * amazon_vms_selected_type['memory-max'],
-                                VM_MEMORY_OVERHEAD, i]                          # the last position is the index
-                candidates_list.append(state_list)
+        container = container_stats.iloc        # container info
+        vm_cpu_overhead_rate = VM_CPU_OVERHEAD_RATE
+        vm_memory_overhead = VM_MEMORY_OVERHEAD
+        # VM features
+        vm_index_type_mapping = self.state.vm_index_type_mapping
+        amazon_vm_types = np.array(AMAZON_VM_TYPES)[:, 0 : 2]
+        if self.initial_test == True:
+            """
+            TEST
+            """
+            candidate_vms = amazon_vm_types
+        else:
+            running_machine = np.array(self.state.vm_resources)[:, 0 : 2]
+            candidate_vms = np.append(running_machine, amazon_vm_types, axis=0)
+            total_vms = len(running_machine)
         
-        for index, row in AMAZON_VM_TYPES.iterrows():
-            if self.container_stats[0] <= row["cpu-max"] - row["cpu-max"] * VM_CPU_OVERHEAD_RATE and \
-                self.container_stats[1] <= row["memory-max"] - VM_MEMORY_OVERHEAD:
-                state_list = [self.container_stats[0],
-                                self.container_stats[1],
-                                row["cpu-max"],
-                                row["memory-max"],
-                                row["cpu-max"] * VM_CPU_OVERHEAD_RATE,
-                                VM_MEMORY_OVERHEAD, len(self.state.vm_resources) + index]   # the last position is the index
-                
-                candidates_list.append(state_list)
+        vm_mapping = np.where((candidate_vms[:, 0] >= container[0])&(candidate_vms[:, 1] >= container[1]))[0]
+        
+        avaiable_vms = candidate_vms[(candidate_vms[:, 0] >= container[0])&(candidate_vms[:, 1] >= container[1]), :]
+        num_vms = len(avaiable_vms)
+        remaining_cpu_capacities = avaiable_vms[:, 0]
+        remaining_memory_capacities = avaiable_vms[:, 1]
+        
+        vm_cpu_overheads = []
+    
+        for index in vm_mapping:
+            if self.initial_test == True:
+                """
+                TEST
+                """
+                vm_cpu_overheads.append(amazon_vm_types[index, 0] * vm_cpu_overhead_rate)
+            else:
+                if index < total_vms:
+                    vm_cpu_overheads.append(amazon_vm_types[vm_index_type_mapping[index], 0] * vm_cpu_overhead_rate)
+                else:
+                    vm_cpu_overheads.append(amazon_vm_types[index - total_vms, 0] * vm_cpu_overhead_rate)
 
-        return candidates_list
+        vm_memory_overheads = np.full(num_vms, vm_memory_overhead)
 
-    def pm_candidates(self) -> list:
+        # container features
+        container_cpus = np.full(num_vms, container[0])
+        container_memories = np.full(num_vms, container[1])
+        
+        merged_features = np.array((container_cpus, container_memories,
+                                    remaining_cpu_capacities, remaining_memory_capacities,
+                                    vm_cpu_overheads, vm_memory_overheads))
+        
+        key = np.argmax(func(*merged_features))
+        action = { "vm_num": vm_mapping[key] }
+
+        return action
+
+    def pm_selection(self, func) -> list:
+        '''pm selection for new created vm
+        '''
         vm_cpu_capacity, vm_memory_capacity, vm_used_cpu, vm_used_memory, vm_core = self.to_allocate_vm_data[1]
-        candidates_list = []
-        for i in range(len(self.state.pm_resources)):
-            if self.state.pm_resources[i][0] >= vm_cpu_capacity and \
-                self.state.pm_resources[i][1] >= vm_memory_capacity and \
-                self.state.pm_resources[i][4] >= vm_core:
-                state_list = [vm_cpu_capacity,
-                              vm_memory_capacity,
-                              self.state.pm_resources[i][0],
-                              self.state.pm_resources[i][1],
-                              self.state.pm_resources[i][-2],
-                              self.state.pm_resources[i][-1],
-                              self.state.pm_resources[i][4],
-                              i]
-                candidates_list.append(state_list)
+        largest_priority = float("inf")
+        selected_id = -1
+        running_machine = np.array(self.state.pm_resources)
+        amazon_pm_types = np.array(AMAZON_PM_TYPES)
+        total_pm_types = amazon_pm_types[:, : 2]
+        amazon_pm_types = np.append(amazon_pm_types, total_pm_types, axis=1)
+        if self.initial_test == True:
+            candidate_pms = amazon_pm_types
+            self.initial_test = False
+        else:
+            candidate_pms = np.append(running_machine, amazon_pm_types, axis=0)
 
-        for index, row in AMAZON_PM_TYPES.iterrows():
-            if vm_cpu_capacity <= row["cpu-max"] and \
-                vm_memory_capacity <= row["memory-max"] and \
-                vm_core <= row["cores-num"]:
-                state_list = [vm_cpu_capacity,
-                              vm_memory_capacity,
-                              row["cpu-max"],
-                              row["memory-max"],
-                              row["cpu-max"],
-                              row["memory-max"],
-                              row["cores-num"], len(self.state.vm_resources) + index]   # the last position is the index
-                
-                candidates_list.append(state_list)
+        pm_mapping = np.where((candidate_pms[:, 0] >= vm_cpu_capacity)&(candidate_pms[:, 1] >= vm_memory_capacity)&(candidate_pms[:, 4] >= vm_core))[0]
 
-        return candidates_list
+        avaiable_pms = candidate_pms[(candidate_pms[:, 0] >= vm_cpu_capacity)&(candidate_pms[:, 1] >= vm_memory_capacity)&(candidate_pms[:, 4] >= vm_core), :]
+        num_pms = len(avaiable_pms)
+
+        vm_cpu_capacities = np.full(num_pms, vm_cpu_capacity).astype(np.float64)
+        vm_memory_capacities = np.full(num_pms, vm_memory_capacity).astype(np.float64)
+        remaining_cpu_capacities = avaiable_pms[: , 0].astype(np.float64)
+        remaining_memory_capacities = avaiable_pms[: , 1].astype(np.float64)
+        pm_cpu_capacities = avaiable_pms[: , -2].astype(np.float64)
+        pm_memory_capacities = avaiable_pms[: , -1].astype(np.float64)
+        pm_cores = avaiable_pms[:, 4].astype(np.float64)
+        
+        merged_features = np.array((vm_cpu_capacities, vm_memory_capacities,
+                                    remaining_cpu_capacities, remaining_memory_capacities,
+                                    pm_cpu_capacities, pm_memory_capacities, pm_cores))
+        # print(merged_features)
+        key = np.argmax(func(*merged_features))
+        action = { "pm_num": pm_mapping[key]}
+
+        return action
+
 
     def step_first_layer(self, action: dict, *container_stats: Iterable) -> None:
         '''action['vm_num'] is the index of a VM
@@ -403,7 +439,7 @@ class Simulator():
         
         
         self.state.vm_index_type_mapping[current_vm_count] = vm_type_index
-        
+
         amazon_vms_selected_type = AMAZON_VM_TYPES.loc[vm_type_index]
         
         selected_vm_type_cpu = amazon_vms_selected_type['cpu-max']
@@ -512,7 +548,7 @@ class Simulator():
     def __update_current_power(self,
                                selected_pm: int,
                                actual_usage: list,
-                               new_cpu_remaining: float
+                               new_cpu_remaining: float,
                                ) -> bool:
         
         previous_utilisation = (actual_usage[selected_pm][5] - actual_usage[selected_pm][0]) / actual_usage[selected_pm][5]
@@ -524,8 +560,6 @@ class Simulator():
         power_draw_delta = max_power - min_power
         new_power_draw = power_draw_delta * (2 * new_utilisation - (new_utilisation ** 1.4) - 2 * previous_utilisation + (previous_utilisation ** 1.4))
         self.running_energy_unit_time += new_power_draw
-        
-        self.energy_list.append(self.running_energy_unit_time)
 
         return True
     
